@@ -34,3 +34,10 @@ specific hosting limit. Production also requires `SECRET_KEY` and
 `MONGODB_URI`; set them as deployment environment variables, not in source.
 The repository's local virtual environment is ignored by Git and should not be
 uploaded as part of the deployment.
+
+## Render deployment
+
+Render can use the included `render.yaml` blueprint. It starts Gunicorn with
+one worker, two threads, and Render's assigned `$PORT`; set `MONGODB_URI` in
+the Render dashboard when prompted. Keep the 100-film catalog active to avoid
+loading an unexpectedly large MongoDB catalog into each app instance.

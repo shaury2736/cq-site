@@ -54,10 +54,9 @@ class MovieRecommendationEngine:
         self._build_content_based_model()
 
     def _build_content_based_model(self):
-        """Module 5: Feature Construction + TF-IDF Vectorization + Cosine Similarity Matrix"""
+        """Build sparse TF-IDF vectors without an all-movies similarity matrix."""
         if not self.movies:
             self.tfidf_matrix = []
-            self.content_sim_matrix = []
             return
         feature_strings = []
         for m in self.movies:
@@ -73,9 +72,6 @@ class MovieRecommendationEngine:
         
         if not any(docs):
             self.tfidf_matrix = [{} for _ in docs]
-            self.content_sim_matrix = [
-                [0.0] * len(docs) for _ in docs
-            ]
             return
 
         term_frequencies = []
@@ -102,19 +98,14 @@ class MovieRecommendationEngine:
                 }
             self.tfidf_matrix.append(weighted_terms)
 
-        self.content_sim_matrix = []
-        for left in self.tfidf_matrix:
-            row = []
-            for right in self.tfidf_matrix:
-                if len(left) > len(right):
-                    left_terms, right_terms = right, left
-                else:
-                    left_terms, right_terms = left, right
-                row.append(sum(
-                    weight * right_terms.get(word, 0.0)
-                    for word, weight in left_terms.items()
-                ))
-            self.content_sim_matrix.append(row)
+    @staticmethod
+    def _sparse_dot_product(left, right):
+        if len(left) > len(right):
+            left, right = right, left
+        return sum(
+            weight * right.get(term, 0.0)
+            for term, weight in left.items()
+        )
 
     def get_similar_movies(self, movie_id, top_n=6):
         """Content-based retrieval of similar movies for a given movie page"""
@@ -122,7 +113,11 @@ class MovieRecommendationEngine:
             return []
         
         idx = self.id_to_idx[movie_id]
-        sim_scores = list(enumerate(self.content_sim_matrix[idx]))
+        movie_vector = self.tfidf_matrix[idx]
+        sim_scores = [
+            (candidate_idx, self._sparse_dot_product(movie_vector, candidate_vector))
+            for candidate_idx, candidate_vector in enumerate(self.tfidf_matrix)
+        ]
         sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
         
         results = []
@@ -143,21 +138,26 @@ class MovieRecommendationEngine:
         if not user_ratings:
             return [0.0] * len(self.movies)
         
-        scores = [0.0] * len(self.movies)
+        rated_vectors = []
         total_weight = 0.0
         
         for m_id, r in user_ratings.items():
             if m_id in self.id_to_idx:
                 idx = self.id_to_idx[m_id]
                 weight = (r - 2.5) / 2.5
-                scores = [
-                    score + similarity * weight
-                    for score, similarity in zip(scores, self.content_sim_matrix[idx])
-                ]
+                rated_vectors.append((self.tfidf_matrix[idx], weight))
                 total_weight += abs(weight)
-                
-        if total_weight > 0:
-            scores = [score / total_weight for score in scores]
+
+        if total_weight == 0:
+            return [0.0] * len(self.movies)
+
+        scores = [
+            sum(
+                self._sparse_dot_product(rated_vector, candidate_vector) * weight
+                for rated_vector, weight in rated_vectors
+            ) / total_weight
+            for candidate_vector in self.tfidf_matrix
+        ]
             
         min_s, max_s = min(scores), max(scores)
         if max_s > min_s:
@@ -187,33 +187,30 @@ class MovieRecommendationEngine:
             rating_totals[user_movie] = rating_totals.get(user_movie, 0.0) + rating
             rating_counts[user_movie] = rating_counts.get(user_movie, 0) + 1
 
-        movie_indices = {movie_id: idx for idx, movie_id in enumerate(self.movie_ids)}
         user_vectors = {}
         for (user_id, movie_id), total in rating_totals.items():
-            vector = user_vectors.setdefault(user_id, [0.0] * len(self.movies))
-            vector[movie_indices[movie_id]] = total / rating_counts[(user_id, movie_id)]
+            vector = user_vectors.setdefault(user_id, {})
+            vector[self.id_to_idx[movie_id]] = total / rating_counts[(user_id, movie_id)]
 
         active_vec = user_vectors.get(active_user_id)
         if active_vec is None:
             return [0.0] * len(self.movies)
 
-        active_norm = math.sqrt(sum(rating * rating for rating in active_vec))
+        active_norm = math.sqrt(sum(rating * rating for rating in active_vec.values()))
         similarities = {}
         if active_norm:
             for user_id, vector in user_vectors.items():
                 if user_id == active_user_id:
                     continue
-                vector_norm = math.sqrt(sum(rating * rating for rating in vector))
+                vector_norm = math.sqrt(sum(rating * rating for rating in vector.values()))
                 if vector_norm:
-                    dot_product = sum(
-                        left * right for left, right in zip(vector, active_vec)
-                    )
+                    dot_product = self._sparse_dot_product(vector, active_vec)
                     similarities[user_id] = dot_product / (vector_norm * active_norm)
 
         scores = [0.0] * len(self.movies)
         total_similarities = [0.0] * len(self.movies)
         for user_id, similarity in similarities.items():
-            for idx, rating in enumerate(user_vectors[user_id]):
+            for idx, rating in user_vectors[user_id].items():
                 if rating > 0:
                     scores[idx] += similarity * rating
                     total_similarities[idx] += similarity
