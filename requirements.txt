@@ -1,11 +1,11 @@
-Authlib
+Authlib>=1.3.0
 email-validator
 Flask
 Flask-Limiter
+gunicorn
 numpy
 pandas
-pymongo[srv]
+pymongo
 python-dotenv
 rapidfuzz
 requests
-Authlib>=1.3.0
