@@ -3,8 +3,6 @@ email-validator
 Flask
 Flask-Limiter
 gunicorn
-numpy
-pandas
 pymongo
 python-dotenv
 rapidfuzz

@@ -7,8 +7,6 @@ dependencies = [
     "email-validator",
     "Flask",
     "Flask-Limiter",
-    "numpy",
-    "pandas",
     "pymongo[srv]",
     "python-dotenv",
     "rapidfuzz",

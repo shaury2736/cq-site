@@ -8,8 +8,7 @@ Implements:
 - Module 9: Explainable AI Rationale Generator ("Why recommended?")
 """
 
-import numpy as np
-import pandas as pd
+import math
 import re
 from collections import Counter
 
@@ -57,7 +56,8 @@ class MovieRecommendationEngine:
     def _build_content_based_model(self):
         """Module 5: Feature Construction + TF-IDF Vectorization + Cosine Similarity Matrix"""
         if not self.movies:
-            self.content_sim_matrix = np.zeros((0, 0))
+            self.tfidf_matrix = []
+            self.content_sim_matrix = []
             return
         feature_strings = []
         for m in self.movies:
@@ -71,30 +71,50 @@ class MovieRecommendationEngine:
         stopwords = {'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'for', 'in', 'of', 'to', 'with', 'on', 'at', 'by', 'this', 'that'}
         docs = [[w for w in re.findall(r'\b[a-z0-9]+\b', text) if w not in stopwords and len(w) > 2] for text in feature_strings]
         
-        vocab = {}
-        for doc in docs:
-            for word in doc:
-                if word not in vocab:
-                    vocab[word] = len(vocab)
-        
-        if not vocab:
-            self.content_sim_matrix = np.zeros((len(self.movies), len(self.movies)))
+        if not any(docs):
+            self.tfidf_matrix = [{} for _ in docs]
+            self.content_sim_matrix = [
+                [0.0] * len(docs) for _ in docs
+            ]
             return
-            
-        tf_matrix = np.zeros((len(docs), len(vocab)))
-        for i, doc in enumerate(docs):
-            for word in doc:
-                tf_matrix[i, vocab[word]] += 1
-                
-        doc_freq = np.sum(tf_matrix > 0, axis=0)
-        idf = np.log((len(docs) + 1) / (doc_freq + 1)) + 1
-        
-        tfidf_matrix = tf_matrix * idf
-        
-        norms = np.linalg.norm(tfidf_matrix, axis=1, keepdims=True)
-        norms[norms == 0] = 1
-        self.tfidf_matrix = tfidf_matrix / norms
-        self.content_sim_matrix = np.dot(self.tfidf_matrix, self.tfidf_matrix.T)
+
+        term_frequencies = []
+        document_frequencies = Counter()
+        for doc in docs:
+            frequencies = Counter(doc)
+            term_frequencies.append(frequencies)
+            document_frequencies.update(frequencies.keys())
+
+        idf = {
+            word: math.log((len(docs) + 1) / (frequency + 1)) + 1
+            for word, frequency in document_frequencies.items()
+        }
+        self.tfidf_matrix = []
+        for frequencies in term_frequencies:
+            weighted_terms = {
+                word: count * idf[word]
+                for word, count in frequencies.items()
+            }
+            norm = math.sqrt(sum(weight * weight for weight in weighted_terms.values()))
+            if norm:
+                weighted_terms = {
+                    word: weight / norm for word, weight in weighted_terms.items()
+                }
+            self.tfidf_matrix.append(weighted_terms)
+
+        self.content_sim_matrix = []
+        for left in self.tfidf_matrix:
+            row = []
+            for right in self.tfidf_matrix:
+                if len(left) > len(right):
+                    left_terms, right_terms = right, left
+                else:
+                    left_terms, right_terms = left, right
+                row.append(sum(
+                    weight * right_terms.get(word, 0.0)
+                    for word, weight in left_terms.items()
+                ))
+            self.content_sim_matrix.append(row)
 
     def get_similar_movies(self, movie_id, top_n=6):
         """Content-based retrieval of similar movies for a given movie page"""
@@ -121,94 +141,94 @@ class MovieRecommendationEngine:
     def _compute_content_scores_for_user(self, user_ratings):
         """Calculate aggregate content-based scores based on user's rated movies weighted by rating"""
         if not user_ratings:
-            return np.zeros(len(self.movies))
+            return [0.0] * len(self.movies)
         
-        scores = np.zeros(len(self.movies))
+        scores = [0.0] * len(self.movies)
         total_weight = 0.0
         
         for m_id, r in user_ratings.items():
             if m_id in self.id_to_idx:
                 idx = self.id_to_idx[m_id]
                 weight = (r - 2.5) / 2.5
-                scores += self.content_sim_matrix[idx] * weight
+                scores = [
+                    score + similarity * weight
+                    for score, similarity in zip(scores, self.content_sim_matrix[idx])
+                ]
                 total_weight += abs(weight)
                 
         if total_weight > 0:
-            scores = scores / total_weight
+            scores = [score / total_weight for score in scores]
             
-        min_s, max_s = scores.min(), scores.max()
+        min_s, max_s = min(scores), max(scores)
         if max_s > min_s:
-            scores = (scores - min_s) / (max_s - min_s)
+            scores = [(score - min_s) / (max_s - min_s) for score in scores]
         else:
-            scores = np.zeros(len(self.movies))
+            scores = [0.0] * len(self.movies)
             
         return scores
 
     def _compute_collaborative_scores_for_user(self, user_ratings, all_ratings, active_user_id):
         """Collaborative scores from persistent user rating events."""
         ratings = [
-            {"user_id": event["user_id"], "movie_id": event["movie_id"], "rating": event["rating"]}
+            (event["user_id"], event["movie_id"], event["rating"])
             for event in all_ratings
             if event.get("user_id") != active_user_id and event.get("movie_id") in self.id_to_idx
         ]
         for m_id, r in user_ratings.items():
             if m_id in self.id_to_idx:
-                ratings.append({
-                "user_id": active_user_id,
-                "movie_id": m_id,
-                "rating": r
-            })
+                ratings.append((active_user_id, m_id, r))
         if not ratings:
-            return np.zeros(len(self.movies))
+            return [0.0] * len(self.movies)
 
-        df = pd.DataFrame(ratings).groupby(
-            ["user_id", "movie_id"], as_index=False
-        )["rating"].mean()
-        user_item_matrix = df.pivot(index='user_id', columns='movie_id', values='rating').fillna(0)
-        
-        for m_id in self.movie_ids:
-            if m_id not in user_item_matrix.columns:
-                user_item_matrix[m_id] = 0.0
-                
-        user_item_matrix = user_item_matrix[self.movie_ids]
-        
-        if active_user_id not in user_item_matrix.index:
-            return np.zeros(len(self.movies))
-            
-        active_vec = user_item_matrix.loc[active_user_id].values
-        
-        active_vec_norm = np.linalg.norm(active_vec)
-        if active_vec_norm == 0:
-            user_sim = np.zeros(len(user_item_matrix))
-        else:
-            matrix_norms = np.linalg.norm(user_item_matrix.values, axis=1)
-            matrix_norms[matrix_norms == 0] = 1
-            user_sim = np.dot(user_item_matrix.values, active_vec) / (matrix_norms * active_vec_norm)
-        
-        
-        sim_series = pd.Series(user_sim, index=user_item_matrix.index)
-        sim_series.drop(active_user_id, errors='ignore', inplace=True)
-        
-        other_users_matrix = user_item_matrix.drop(active_user_id, errors='ignore')
-        
-        scores = np.zeros(len(self.movies))
-        total_sim = np.zeros(len(self.movies))
-        
-        for idx, m_id in enumerate(self.movie_ids):
-            movie_ratings = other_users_matrix[m_id]
-            valid_mask = movie_ratings > 0
-            if valid_mask.any():
-                scores[idx] = np.dot(sim_series[valid_mask], movie_ratings[valid_mask])
-                total_sim[idx] = sim_series[valid_mask].sum()
-                
-        with np.errstate(divide='ignore', invalid='ignore'):
-            collab_scores = np.where(total_sim > 0, scores / total_sim, 0.0)
-            
-        min_s, max_s = collab_scores.min(), collab_scores.max()
+        rating_totals = {}
+        rating_counts = {}
+        for user_id, movie_id, rating in ratings:
+            user_movie = (user_id, movie_id)
+            rating_totals[user_movie] = rating_totals.get(user_movie, 0.0) + rating
+            rating_counts[user_movie] = rating_counts.get(user_movie, 0) + 1
+
+        movie_indices = {movie_id: idx for idx, movie_id in enumerate(self.movie_ids)}
+        user_vectors = {}
+        for (user_id, movie_id), total in rating_totals.items():
+            vector = user_vectors.setdefault(user_id, [0.0] * len(self.movies))
+            vector[movie_indices[movie_id]] = total / rating_counts[(user_id, movie_id)]
+
+        active_vec = user_vectors.get(active_user_id)
+        if active_vec is None:
+            return [0.0] * len(self.movies)
+
+        active_norm = math.sqrt(sum(rating * rating for rating in active_vec))
+        similarities = {}
+        if active_norm:
+            for user_id, vector in user_vectors.items():
+                if user_id == active_user_id:
+                    continue
+                vector_norm = math.sqrt(sum(rating * rating for rating in vector))
+                if vector_norm:
+                    dot_product = sum(
+                        left * right for left, right in zip(vector, active_vec)
+                    )
+                    similarities[user_id] = dot_product / (vector_norm * active_norm)
+
+        scores = [0.0] * len(self.movies)
+        total_similarities = [0.0] * len(self.movies)
+        for user_id, similarity in similarities.items():
+            for idx, rating in enumerate(user_vectors[user_id]):
+                if rating > 0:
+                    scores[idx] += similarity * rating
+                    total_similarities[idx] += similarity
+
+        collab_scores = [
+            score / total_similarity if total_similarity else 0.0
+            for score, total_similarity in zip(scores, total_similarities)
+        ]
+        min_s, max_s = min(collab_scores), max(collab_scores)
         if max_s > min_s:
-            collab_scores = (collab_scores - min_s) / (max_s - min_s)
+            collab_scores = [
+                (score - min_s) / (max_s - min_s) for score in collab_scores
+            ]
         else:
-            collab_scores = np.zeros(len(self.movies))
+            collab_scores = [0.0] * len(self.movies)
             
         return collab_scores
 
@@ -229,7 +249,10 @@ class MovieRecommendationEngine:
             user_ratings, all_ratings or [], active_user_id
         )
         
-        hybrid_scores = (alpha * content_scores) + ((1 - alpha) * collab_scores)
+        hybrid_scores = [
+            (alpha * content_score) + ((1 - alpha) * collab_score)
+            for content_score, collab_score in zip(content_scores, collab_scores)
+        ]
         
         rated_movie_ids = set(user_ratings.keys())
         
