@@ -26,10 +26,10 @@ from pymongo.errors import PyMongoError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .data_store import DatabaseUnavailable, TMDB_MOVIE_ID_OFFSET, store
-from email_service import EmailServiceError, send_otp_email
-from recommendation_engine import engine
-from search_service import search_engine
-from tmdb_service import (
+from .email_service import EmailServiceError, send_otp_email
+from .recommendation_engine import engine
+from .search_service import search_engine
+from .tmdb_service import (
     TMDBError,
     TMDBService,
     get_backdrop_url,
