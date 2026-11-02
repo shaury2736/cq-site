@@ -1,2 +1,19 @@
+[project]
+name = "cq-site"
+version = "1.0.0"
+requires-python = ">=3.12"
+dependencies = [
+    "Authlib>=1.3.0",
+    "email-validator",
+    "Flask",
+    "Flask-Limiter",
+    "numpy",
+    "pandas",
+    "pymongo[srv]",
+    "python-dotenv",
+    "rapidfuzz",
+    "requests"
+]
+
 [tool.vercel]
 entrypoint = "backend.app:app"
