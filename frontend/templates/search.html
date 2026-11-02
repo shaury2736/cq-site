@@ -1,0 +1,500 @@
+{% extends "base.html" %}
+
+{% block title %}CQ — Search Movies{% endblock %}
+
+{% block content %}
+<div class="search-results-container" style="max-width: 1200px; margin: 0 auto; padding: 20px 0 60px;">
+  
+  <!-- Search Capsule with Live Autocomplete -->
+  <div class="search-capsule" id="search-capsule" style="margin-bottom: 24px; position: relative;">
+    <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="11" cy="11" r="8"></circle>
+      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+    </svg>
+    <div class="search-input-wrapper">
+      <input type="text" id="main-search-input" placeholder="Search by title, actor, director, genre, or keywords..." autocomplete="off" value="{{ initial_query or '' }}">
+      <div class="search-spinner" id="search-spinner"></div>
+      <button type="button" class="search-clear-btn" id="search-clear-btn" title="Clear search" aria-label="Clear search">✕</button>
+    </div>
+    <button class="btn-search" onclick="submitSearch()">Search</button>
+
+    <!-- Animated Live Suggestions Dropdown -->
+    <div class="search-suggestions-dropdown" id="search-suggestions-dropdown">
+      <div id="dropdown-typo-hint" class="suggestion-typo-hint" style="display: none;"></div>
+      <ul class="suggestion-list" id="suggestion-list"></ul>
+      <div class="suggestion-footer" id="suggestion-footer" onclick="submitSearch()">
+        <span id="suggestion-footer-text">Press Enter to view all results</span>
+        <span>→</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Did You Mean / Spelling Correction Alert -->
+  <div class="did-you-mean-banner" id="did-you-mean-banner" style="display: none;">
+    <span class="did-you-mean-icon">💡</span>
+    <span id="did-you-mean-text"></span>
+  </div>
+
+  <!-- Genre Filter Chips -->
+  <div class="filter-bar" id="search-genre-chips" style="margin-bottom: 24px;">
+    <div class="chip active" data-genre="All" onclick="setSearchGenre('All')">All Genres</div>
+    <div class="chip" data-genre="Sci-Fi" onclick="setSearchGenre('Sci-Fi')">Sci-Fi</div>
+    <div class="chip" data-genre="Action" onclick="setSearchGenre('Action')">Action</div>
+    <div class="chip" data-genre="Drama" onclick="setSearchGenre('Drama')">Drama</div>
+    <div class="chip" data-genre="Crime" onclick="setSearchGenre('Crime')">Crime</div>
+    <div class="chip" data-genre="Animation" onclick="setSearchGenre('Animation')">Animation</div>
+    <div class="chip" data-genre="Thriller" onclick="setSearchGenre('Thriller')">Thriller</div>
+    <div class="chip" data-genre="Comedy" onclick="setSearchGenre('Comedy')">Comedy</div>
+    <div class="chip" data-genre="Horror" onclick="setSearchGenre('Horror')">Horror</div>
+    <div class="chip" data-genre="Romance" onclick="setSearchGenre('Romance')">Romance</div>
+  </div>
+
+  <!-- Search Meta Bar (Count & Sort) -->
+  <div class="search-meta-bar" id="search-meta-bar">
+    <div class="search-count-title" id="search-results-heading">Search Movies</div>
+    <div class="search-sort-group">
+      <span class="search-sort-label">Sort by:</span>
+      <select class="search-sort-select" id="search-sort-select" onchange="changeSearchSort()">
+        <option value="relevance">Most Relevant</option>
+        <option value="rating">Highest Rated</option>
+        <option value="year">Newest First</option>
+        <option value="popular">Most Popular</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Movie Results Grid -->
+  <div class="movie-grid" id="search-results-grid">
+    <!-- Dynamic Cards loaded here -->
+  </div>
+
+  <!-- Empty State Container -->
+  <div class="search-empty-box" id="search-empty-box" style="display: none;">
+    <span class="search-empty-icon">🎬</span>
+    <h3 class="search-empty-title" id="empty-title">No matching movies found</h3>
+    <p class="search-empty-text" id="empty-desc">
+      We couldn't find any movies matching your search. Try checking for typos, searching by actor or director, or try one of these popular searches:
+    </p>
+    <div class="search-suggestions-chips">
+      <div class="suggestion-chip" onclick="quickSearch('Interstellar')">Interstellar</div>
+      <div class="suggestion-chip" onclick="quickSearch('Inception')">Inception</div>
+      <div class="suggestion-chip" onclick="quickSearch('Christopher Nolan')">Christopher Nolan</div>
+      <div class="suggestion-chip" onclick="quickSearch('Spider-Man')">Spider-Man</div>
+      <div class="suggestion-chip" onclick="quickSearch('Leonardo DiCaprio')">Leonardo DiCaprio</div>
+      <div class="suggestion-chip" onclick="quickSearch('The Dark Knight')">The Dark Knight</div>
+      <div class="suggestion-chip" onclick="quickSearch('Avengers')">Avengers</div>
+    </div>
+  </div>
+
+  <!-- Pagination Controls -->
+  <div class="search-pagination" id="search-pagination" style="display: none;">
+    <button class="page-btn" id="btn-prev-page" onclick="goToPage(currentPage - 1)">← Previous</button>
+    <div id="pagination-numbers" style="display: flex; gap: 6px;"></div>
+    <button class="page-btn" id="btn-next-page" onclick="goToPage(currentPage + 1)">Next →</button>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  let currentSearchQuery = "{{ initial_query or '' }}";
+  let currentGenre = 'All';
+  let currentSort = 'relevance';
+  let currentPage = 1;
+  let totalPages = 1;
+  let activeSuggestionIndex = -1;
+  let suggestionsAbortController = null;
+  let searchAbortController = null;
+  let liveSearchDebounceTimer = null;
+  let ignoreTypoCorrection = false;
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const input = document.getElementById('main-search-input');
+    const clearBtn = document.getElementById('search-clear-btn');
+    const dropdown = document.getElementById('search-suggestions-dropdown');
+
+    // Parse URL params if available
+    const urlParams = new URLSearchParams(window.location.search);
+    const qFromUrl = urlParams.get('q');
+    if (qFromUrl) {
+      currentSearchQuery = qFromUrl;
+      input.value = qFromUrl;
+    }
+    if (urlParams.get('genre')) {
+      currentGenre = urlParams.get('genre');
+      updateGenreChips();
+    }
+    if (urlParams.get('sort_by')) {
+      currentSort = urlParams.get('sort_by');
+      document.getElementById('search-sort-select').value = currentSort;
+    }
+
+    updateClearButtonVisibility();
+
+    // 1. Live input listener with Debounce & AbortController
+    input.addEventListener('input', (e) => {
+      const q = e.target.value;
+      updateClearButtonVisibility();
+
+      clearTimeout(liveSearchDebounceTimer);
+      liveSearchDebounceTimer = setTimeout(() => {
+        handleLiveSearch(q);
+      }, 350);
+    });
+
+    // 2. Keyboard Navigation in suggestions
+    input.addEventListener('keydown', (e) => {
+      const items = document.querySelectorAll('.suggestion-item');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (items.length > 0) {
+          activeSuggestionIndex = (activeSuggestionIndex + 1) % items.length;
+          updateActiveSuggestion(items);
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (items.length > 0) {
+          activeSuggestionIndex = (activeSuggestionIndex - 1 + items.length) % items.length;
+          updateActiveSuggestion(items);
+        }
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (activeSuggestionIndex >= 0 && items[activeSuggestionIndex]) {
+          const targetUrl = items[activeSuggestionIndex].dataset.url;
+          if (targetUrl) {
+            window.location.href = targetUrl;
+            return;
+          }
+        }
+        closeDropdown();
+        submitSearch();
+      } else if (e.key === 'Escape') {
+        closeDropdown();
+      }
+    });
+
+    // 3. Clear button handler
+    clearBtn.addEventListener('click', () => {
+      input.value = '';
+      currentSearchQuery = '';
+      updateClearButtonVisibility();
+      closeDropdown();
+      updateUrl('');
+      performFullSearch('', 1);
+      input.focus();
+    });
+
+    // 4. Click outside to close dropdown
+    document.addEventListener('click', (e) => {
+      const capsule = document.getElementById('search-capsule');
+      if (capsule && !capsule.contains(e.target)) {
+        closeDropdown();
+      }
+    });
+
+    // 5. Initial load if query is present, or load popular movies
+    performFullSearch(currentSearchQuery, 1);
+  });
+
+  function updateClearButtonVisibility() {
+    const input = document.getElementById('main-search-input');
+    const clearBtn = document.getElementById('search-clear-btn');
+    if (clearBtn) {
+      clearBtn.classList.toggle('visible', Boolean(input.value.trim()));
+    }
+  }
+
+  function updateActiveSuggestion(items) {
+    items.forEach((item, idx) => {
+      item.classList.toggle('active', idx === activeSuggestionIndex);
+    });
+    if (activeSuggestionIndex >= 0 && items[activeSuggestionIndex]) {
+      items[activeSuggestionIndex].scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function closeDropdown() {
+    const dropdown = document.getElementById('search-suggestions-dropdown');
+    if (dropdown) dropdown.classList.remove('active');
+    activeSuggestionIndex = -1;
+  }
+
+  // Real-Time Live Search (while typing)
+  async function handleLiveSearch(query) {
+    const cleanQ = query.trim();
+    if (!cleanQ) {
+      closeDropdown();
+      performFullSearch('', 1);
+      return;
+    }
+
+    // Cancel previous suggestion request
+    if (suggestionsAbortController) {
+      suggestionsAbortController.abort();
+    }
+    suggestionsAbortController = new AbortController();
+
+    const spinner = document.getElementById('search-spinner');
+    if (spinner) spinner.classList.add('visible');
+
+    try {
+      // Parallel: fetch autocomplete suggestions AND dynamic results update
+      const res = await fetch(`/api/search/suggestions?q=${encodeURIComponent(cleanQ)}&limit=6`, {
+        signal: suggestionsAbortController.signal
+      });
+      const data = await res.json();
+
+      if (spinner) spinner.classList.remove('visible');
+      renderSuggestions(data, cleanQ);
+
+      // Dynamically update full results grid as typing occurs!
+      performFullSearch(cleanQ, 1, false);
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('Autocomplete failed:', err);
+        if (spinner) spinner.classList.remove('visible');
+      }
+    }
+  }
+
+  function renderSuggestions(data, query) {
+    const dropdown = document.getElementById('search-suggestions-dropdown');
+    const list = document.getElementById('suggestion-list');
+    const typoHint = document.getElementById('dropdown-typo-hint');
+    const footerText = document.getElementById('suggestion-footer-text');
+
+    if (!data.suggestions || data.suggestions.length === 0) {
+      list.innerHTML = `<div class="suggestion-empty">No instant suggestions for "${query}". Press Enter to search all.</div>`;
+      typoHint.style.display = 'none';
+      dropdown.classList.add('active');
+      return;
+    }
+
+    // Typo indicator in dropdown
+    if (data.spell_corrected && data.corrected_query) {
+      typoHint.innerHTML = `<span>💡</span> <span>Showing closest matches for <strong>${data.corrected_query}</strong></span>`;
+      typoHint.style.display = 'flex';
+    } else {
+      typoHint.style.display = 'none';
+    }
+
+    list.innerHTML = data.suggestions.map(s => {
+      const posterHtml = s.poster_url 
+        ? `<img class="suggestion-poster" src="${s.poster_url}" alt="${s.title}" loading="lazy" />`
+        : `<div class="suggestion-poster-fallback">🎬</div>`;
+
+      const matchBadge = s.match_field 
+        ? `<span class="suggestion-badge ${s.match_field}">${s.match_field}</span>` 
+        : '';
+
+      const ratingBadge = s.rating 
+        ? `<span class="suggestion-rating">★ ${s.rating}</span>`
+        : '';
+
+      const yearText = s.year || 'Year';
+      const genreText = s.genres && s.genres.length > 0 ? s.genres[0] : '';
+      const directorText = s.director ? `• Dir: ${s.director}` : '';
+
+      return `
+        <li class="suggestion-item" data-url="${s.url}" onclick="window.location.href='${s.url}'">
+          ${posterHtml}
+          <div class="suggestion-info">
+            <div class="suggestion-title">${s.highlight_html || s.title}</div>
+            <div class="suggestion-sub">
+              <span>${yearText} • ${genreText} ${directorText}</span>
+            </div>
+          </div>
+          ${matchBadge}
+          ${ratingBadge}
+        </li>
+      `;
+    }).join('');
+
+    if (footerText) {
+      footerText.textContent = `View all results for "${query}"`;
+    }
+
+    activeSuggestionIndex = -1;
+    dropdown.classList.add('active');
+  }
+
+  // Full Search Results API Call
+  async function performFullSearch(query, page = 1, showSpinner = true) {
+    currentSearchQuery = query;
+    currentPage = page;
+
+    if (searchAbortController) {
+      searchAbortController.abort();
+    }
+    searchAbortController = new AbortController();
+
+    const grid = document.getElementById('search-results-grid');
+    const emptyBox = document.getElementById('search-empty-box');
+    const heading = document.getElementById('search-results-heading');
+    const banner = document.getElementById('did-you-mean-banner');
+    const spinner = document.getElementById('search-spinner');
+
+    if (showSpinner && spinner) spinner.classList.add('visible');
+
+    const params = new URLSearchParams({
+      q: currentSearchQuery,
+      page: currentPage,
+      limit: 20,
+      sort_by: currentSort,
+      genre: currentGenre === 'All' ? '' : currentGenre
+    });
+
+    try {
+      const res = await fetch(`/api/search?${params.toString()}`, {
+        signal: searchAbortController.signal
+      });
+      const data = await res.json();
+
+      if (spinner) spinner.classList.remove('visible');
+
+      totalPages = data.total_pages || 1;
+
+      // Handle Spelling Correction Banner
+      if (data.spell_corrected && data.corrected_query && !ignoreTypoCorrection) {
+        banner.style.display = 'flex';
+        document.getElementById('did-you-mean-text').innerHTML = `
+          <span>Showing results for <button class="btn-correction" onclick="forceSearch('${data.corrected_query}')">${data.corrected_query}</button></span>
+          <span class="search-instead-sep">•</span>
+          <span class="search-instead-wrap">Search instead for <button class="btn-instead" onclick="searchOriginalExact('${data.query}')">${data.query}</button></span>
+        `;
+      } else {
+        banner.style.display = 'none';
+      }
+
+      // Update heading
+      if (currentSearchQuery) {
+        heading.textContent = `Results for "${data.corrected_query || currentSearchQuery}" (${data.total_results} ${data.total_results === 1 ? 'movie' : 'movies'} found)`;
+      } else {
+        heading.textContent = `Browse All Movies (${data.total_results} total)`;
+      }
+
+      // Render Movie Cards or Empty State
+      if (data.movies && data.movies.length > 0) {
+        grid.style.display = 'grid';
+        emptyBox.style.display = 'none';
+        grid.innerHTML = data.movies.map(m => createMovieCard(m)).join('');
+        renderPagination();
+      } else {
+        grid.style.display = 'none';
+        emptyBox.style.display = 'block';
+        document.getElementById('empty-title').textContent = currentSearchQuery 
+          ? `No movies found for "${currentSearchQuery}"` 
+          : 'No movies found';
+        document.getElementById('search-pagination').style.display = 'none';
+      }
+
+      updateUrl(currentSearchQuery);
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('Search request failed:', err);
+        if (spinner) spinner.classList.remove('visible');
+      }
+    }
+  }
+
+  function submitSearch() {
+    const q = document.getElementById('main-search-input').value.trim();
+    closeDropdown();
+    ignoreTypoCorrection = false;
+    performFullSearch(q, 1);
+  }
+
+  function forceSearch(correctedQuery) {
+    document.getElementById('main-search-input').value = correctedQuery;
+    currentSearchQuery = correctedQuery;
+    ignoreTypoCorrection = false;
+    closeDropdown();
+    performFullSearch(correctedQuery, 1);
+  }
+
+  function searchOriginalExact(originalQuery) {
+    ignoreTypoCorrection = true;
+    document.getElementById('did-you-mean-banner').style.display = 'none';
+    performFullSearch(originalQuery, 1);
+  }
+
+  function quickSearch(query) {
+    document.getElementById('main-search-input').value = query;
+    currentSearchQuery = query;
+    ignoreTypoCorrection = false;
+    updateClearButtonVisibility();
+    closeDropdown();
+    performFullSearch(query, 1);
+  }
+
+  function setSearchGenre(genre) {
+    currentGenre = genre;
+    updateGenreChips();
+    performFullSearch(currentSearchQuery, 1);
+  }
+
+  function updateGenreChips() {
+    document.querySelectorAll('#search-genre-chips .chip').forEach(c => {
+      c.classList.toggle('active', c.dataset.genre === currentGenre);
+    });
+  }
+
+  function changeSearchSort() {
+    currentSort = document.getElementById('search-sort-select').value;
+    performFullSearch(currentSearchQuery, 1);
+  }
+
+  function goToPage(page) {
+    if (page < 1 || page > totalPages) return;
+    performFullSearch(currentSearchQuery, page);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function renderPagination() {
+    const container = document.getElementById('search-pagination');
+    const numbersBox = document.getElementById('pagination-numbers');
+    const prevBtn = document.getElementById('btn-prev-page');
+    const nextBtn = document.getElementById('btn-next-page');
+
+    if (totalPages <= 1) {
+      container.style.display = 'none';
+      return;
+    }
+
+    container.style.display = 'flex';
+    prevBtn.disabled = currentPage <= 1;
+    nextBtn.disabled = currentPage >= totalPages;
+
+    let html = '';
+    const startPage = Math.max(1, currentPage - 2);
+    const endPage = Math.min(totalPages, currentPage + 2);
+
+    for (let p = startPage; p <= endPage; p++) {
+      html += `<button class="page-btn ${p === currentPage ? 'active' : ''}" onclick="goToPage(${p})">${p}</button>`;
+    }
+    numbersBox.innerHTML = html;
+  }
+
+  function updateUrl(q) {
+    const url = new URL(window.location);
+    if (q) {
+      url.searchParams.set('q', q);
+    } else {
+      url.searchParams.delete('q');
+    }
+    if (currentGenre && currentGenre !== 'All') {
+      url.searchParams.set('genre', currentGenre);
+    } else {
+      url.searchParams.delete('genre');
+    }
+    if (currentSort && currentSort !== 'relevance') {
+      url.searchParams.set('sort_by', currentSort);
+    } else {
+      url.searchParams.delete('sort_by');
+    }
+    window.history.replaceState({}, '', url.toString());
+  }
+</script>
+{% endblock %}
+

@@ -1,0 +1,372 @@
+{% extends "base.html" %}
+
+{% block title %}CQ — Movie Details{% endblock %}
+
+{% block content %}
+<section class="details-hero">
+	<img id="movie-poster" class="details-poster" src="" alt="Movie poster" />
+	<div class="details-main">
+		<div class="details-meta">
+			<span class="badge-match" id="movie-source">TMDB</span>
+			<span class="badge-imdb" id="movie-rating">Loading rating</span>
+			<span class="badge-tag" id="movie-year"></span>
+			<span class="badge-tag" id="movie-runtime"></span>
+			<span class="badge-tag" id="movie-genres"></span>
+		</div>
+		<h1 class="details-title" id="movie-title">Loading movie</h1>
+		<p id="movie-tagline" class="details-overview"></p>
+		<p id="movie-overview" class="details-overview"></p>
+		<div class="info-grid">
+			<div><strong>Director</strong><div id="movie-director">-</div></div>
+			<div><strong>Original language</strong><div id="movie-language">-</div></div>
+			<div><strong>Status</strong><div id="movie-status">-</div></div>
+			<div><strong>Production</strong><div id="movie-production">-</div></div>
+			<div><strong>Spoken languages</strong><div id="movie-spoken-languages">-</div></div>
+		</div>
+		<a id="movie-homepage" rel="noopener noreferrer" target="_blank" hidden>Official website</a>
+		<div class="hero-actions">
+			<button class="btn btn-primary" id="movie-trailer-button" disabled>▶ Watch Trailer</button>
+			<button class="btn btn-secondary" id="movie-watchlist-button">+ Add to Watchlist</button>
+		</div>
+	</div>
+</section>
+
+<section id="movie-watch-providers-section" style="margin-bottom: 32px;" hidden>
+	<div class="section-header"><div class="section-title"><span class="title-accent"></span><span>Where to Watch in India</span></div></div>
+	<p id="movie-provider-note" style="color: var(--text-muted); font-size: 12px; margin-bottom: 12px;"></p>
+	<div id="movie-watch-providers" class="filter-bar"></div>
+</section>
+
+<section style="margin-bottom: 32px;">
+	<div class="section-header"><div class="section-title"><span class="title-accent"></span><span>Top Cast</span></div></div>
+	<p id="movie-enrichment-status" role="status" style="color: var(--text-muted); font-size: 13px;"></p>
+	<div id="movie-cast" class="details-overview">Loading cast…</div>
+</section>
+
+<section style="margin-bottom: 40px;">
+	<div class="section-header"><div class="section-title"><span class="title-accent"></span><span>Rate and Review</span></div></div>
+	<div style="max-width: 720px;">
+		<div class="rating-entry-row">
+			<div id="movie-rating-stars" class="peek-rating" role="radiogroup" aria-label="Rate this movie" tabindex="0">
+				<div class="peek-rating__row">
+					<span class="peek-rating__tip" aria-hidden="true"></span>
+					{% for rating in range(1, 6) %}
+					<button type="button" class="peek-rating__star" data-rating="{{ rating }}" role="radio" aria-checked="false" aria-label="{{ rating }} of 5 stars" tabindex="-1"><span class="peek-rating__lift"><span class="peek-rating__glyph" data-lit="false">★</span></span></button>
+					{% endfor %}
+				</div>
+			</div>
+			<span id="your-rating-label" aria-live="polite">Select a rating</span>
+		</div>
+		<label class="form-label" for="movie-review-input">Your review</label>
+		<textarea id="movie-review-input" class="form-control" rows="3" maxlength="2000" placeholder="What did you think of this movie?"></textarea>
+		<button type="button" class="btn btn-primary" style="margin-top: 12px;" onclick="submitMovieReview()">Submit Review</button>
+		<p id="movie-review-message" role="status" style="margin-top: 10px; color: var(--text-secondary);"></p>
+	</div>
+</section>
+
+<section>
+	<div class="section-header"><div class="section-title"><span class="title-accent"></span><span>Community Reviews</span></div></div>
+	<div id="movie-reviews"></div>
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+	const moviePageId = {{ movie_id }};
+	let moviePageRating = 0;
+	let movieRatingHover = null;
+
+	document.addEventListener('DOMContentLoaded', () => {
+		initializeMovieRating();
+		loadMovieDetails();
+	});
+
+	let currentMovieDetails = null;
+
+	async function loadMovieDetails() {
+		try {
+			const response = await fetch(`/api/movie/${moviePageId}`);
+			const movie = await response.json();
+			if (!response.ok) {
+				document.getElementById('movie-title').textContent = movie.error || 'Movie unavailable';
+				return;
+			}
+			currentMovieDetails = movie;
+			renderMovieDetails(movie);
+			const needsEnrichment = movie.tmdb_id && (
+				!movie.details_synced_at || !movie.cast?.length || !movie.directors?.length ||
+				!movie.watch_provider_checked_at
+			);
+			if (needsEnrichment) {
+				document.getElementById('movie-enrichment-status').textContent = 'Loading cast, trailer, and provider details…';
+				loadMovieEnrichment();
+			}
+		} catch (error) {
+			console.error('Could not load movie details:', error);
+			document.getElementById('movie-title').textContent = 'Movie details could not be loaded';
+			document.getElementById('movie-overview').textContent = 'Check your connection and try opening this movie again.';
+		}
+	}
+
+	function renderMovieDetails(movie) {
+		document.title = `CQ — ${movie.title || 'Movie Details'}`;
+		document.getElementById('movie-title').textContent = movie.title || '';
+		document.getElementById('movie-poster').src = movie.poster_url || '';
+		document.getElementById('movie-overview').textContent = movie.overview || 'No overview available.';
+		document.getElementById('movie-tagline').textContent = movie.tagline || '';
+		document.getElementById('movie-year').textContent = movie.year || '';
+		document.getElementById('movie-runtime').textContent = movie.duration || '';
+		document.getElementById('movie-genres').textContent = (movie.genres || []).join(' • ');
+		document.getElementById('movie-director').textContent = movie.director || '-';
+		document.getElementById('movie-language').textContent = movie.original_language || '-';
+		document.getElementById('movie-status').textContent = movie.status || '-';
+		document.getElementById('movie-source').textContent = movie.tmdb_id ? 'TMDB' : 'CQ Catalog';
+		const score = movie.vote_average ?? movie.imdb_rating;
+		document.getElementById('movie-rating').textContent = score == null ? 'Not rated' : `★ ${Number(score).toFixed(1)} / 10`;
+		const castNames = (movie.cast || []).map(person => typeof person === 'string' ? person : person.name).filter(Boolean);
+		document.getElementById('movie-cast').textContent = castNames.join(', ') || 'Cast information unavailable.';
+		document.getElementById('movie-enrichment-status').textContent = '';
+		document.getElementById('movie-production').textContent = (movie.production_companies || []).map(company => company.name).filter(Boolean).join(', ') || '-';
+		document.getElementById('movie-spoken-languages').textContent = (movie.spoken_languages || []).map(language => language.english_name || language.name).filter(Boolean).join(', ') || '-';
+		const homepage = document.getElementById('movie-homepage');
+		if (movie.homepage) {
+			homepage.href = movie.homepage;
+			homepage.hidden = false;
+		}
+		renderMovieProviders(movie.watch_providers, movie.watch_provider_checked_at);
+
+		const trailerButton = document.getElementById('movie-trailer-button');
+		trailerButton.disabled = !movie.youtube_trailer_id;
+		trailerButton.onclick = () => openTrailerModal(movie.youtube_trailer_id, movie.title);
+
+		const watchlistButton = document.getElementById('movie-watchlist-button');
+		watchlistButton.classList.toggle('active', Boolean(movie.in_watchlist));
+		watchlistButton.textContent = movie.in_watchlist ? '✓ In Watchlist' : '+ Add to Watchlist';
+		watchlistButton.onclick = event => toggleWatchlist(moviePageId, event);
+
+		if (movie.user_rating) selectMovieRating(movie.user_rating);
+		renderMovieReviews(movie.user_reviews || []);
+	}
+
+	async function loadMovieEnrichment() {
+		try {
+			const response = await fetch(`/api/movies/${moviePageId}/enrichment`);
+			const result = await response.json();
+			if (!response.ok || !result.movie) {
+				document.getElementById('movie-enrichment-status').textContent = result.error || 'Additional movie details are temporarily unavailable.';
+				return;
+			}
+			currentMovieDetails = { ...currentMovieDetails, ...result.movie };
+			currentMovieDetails.user_rating = currentMovieDetails.user_rating;
+			renderMovieDetails(currentMovieDetails);
+		} catch (error) {
+			console.error('Could not load supplementary movie details:', error);
+			document.getElementById('movie-enrichment-status').textContent = 'Additional movie details are temporarily unavailable.';
+		}
+	}
+
+	function selectMovieRating(rating) {
+		moviePageRating = Math.max(0, Math.min(5, Number(rating) || 0));
+		paintMovieRating();
+	}
+
+	function initializeMovieRating() {
+		const root = document.getElementById('movie-rating-stars');
+		const row = root.querySelector('.peek-rating__row');
+		const buttons = Array.from(row.querySelectorAll('[data-rating]'));
+		const tip = row.querySelector('.peek-rating__tip');
+		const labels = ['Poor', 'Fair', 'Good', 'Great', 'Superb'];
+		let pressing = false;
+		let pointerId = null;
+
+		const setPreview = index => {
+			if (movieRatingHover === index) return;
+			movieRatingHover = index;
+			paintMovieRating(labels, buttons, tip);
+		};
+		const indexAt = event => {
+			const rect = row.getBoundingClientRect();
+			if (!rect.width) return null;
+			if (pressing && (event.clientY < rect.top - 32 || event.clientY > rect.bottom + 32)) return null;
+			return Math.max(0, Math.min(buttons.length - 1, Math.floor(((event.clientX - rect.left) / rect.width) * buttons.length)));
+		};
+		const commit = index => {
+			const next = index + 1 === moviePageRating ? 0 : index + 1;
+			selectMovieRating(next);
+			if (next > 0 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+				const glyph = buttons[next - 1].querySelector('.peek-rating__glyph');
+				if (glyph && typeof glyph.animate === 'function') {
+					glyph.animate([
+						{ transform: 'scale(1)' },
+						{ transform: 'scale(1.3)', offset: 0.35 },
+						{ transform: 'scale(1)' }
+					], { duration: 300, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' });
+				}
+			}
+		};
+
+		row.addEventListener('pointerenter', event => {
+			if (event.pointerType === 'mouse') setPreview(indexAt(event));
+		});
+		row.addEventListener('pointerdown', event => {
+			if (event.button !== 0 || pressing) return;
+			pressing = true;
+			pointerId = event.pointerId;
+			root.removeAttribute('data-instant');
+			row.setPointerCapture(event.pointerId);
+			setPreview(indexAt(event));
+		});
+		row.addEventListener('pointermove', event => {
+			if (event.pointerType !== 'mouse' && !pressing) return;
+			if (pressing && event.pointerId !== pointerId) return;
+			setPreview(indexAt(event));
+		});
+		row.addEventListener('pointerup', event => {
+			if (!pressing || event.pointerId !== pointerId) return;
+			const hovered = movieRatingHover;
+			pressing = false;
+			pointerId = null;
+			if (hovered !== null) commit(hovered);
+			setPreview(null);
+		});
+		row.addEventListener('pointercancel', () => {
+			pressing = false;
+			pointerId = null;
+			setPreview(null);
+		});
+		row.addEventListener('pointerleave', () => {
+			if (!pressing) setPreview(null);
+		});
+		root.addEventListener('keydown', event => {
+			let next;
+			switch (event.key) {
+				case 'ArrowRight':
+				case 'ArrowUp': next = Math.min(5, moviePageRating + 1); break;
+				case 'ArrowLeft':
+				case 'ArrowDown': next = Math.max(0, moviePageRating - 1); break;
+				case 'Home': next = 1; break;
+				case 'End': next = 5; break;
+				case 'Backspace':
+				case 'Delete': next = 0; break;
+				case ' ':
+				case 'Enter': {
+					const index = buttons.indexOf(event.target.closest('[data-rating]'));
+					if (index < 0) return;
+					event.preventDefault();
+					commit(index);
+					return;
+				}
+				default: return;
+			}
+			event.preventDefault();
+			root.setAttribute('data-instant', 'true');
+			selectMovieRating(next);
+			buttons[Math.max(next, 1) - 1].focus();
+		});
+		window.addEventListener('blur', () => {
+			pressing = false;
+			pointerId = null;
+			setPreview(null);
+		});
+		paintMovieRating(labels, buttons, tip);
+	}
+
+	function paintMovieRating(labels = ['Poor', 'Fair', 'Good', 'Great', 'Superb'], buttons, tip) {
+		const row = document.querySelector('#movie-rating-stars .peek-rating__row');
+		buttons ||= Array.from(row.querySelectorAll('[data-rating]'));
+		tip ||= row.querySelector('.peek-rating__tip');
+		const previewing = movieRatingHover !== null;
+		const shown = previewing ? movieRatingHover + 1 : moviePageRating;
+		buttons.forEach((button, index) => {
+			const glyph = button.querySelector('.peek-rating__glyph');
+			glyph.dataset.lit = index < shown;
+			button.setAttribute('aria-checked', String(index + 1 === moviePageRating));
+			button.setAttribute('aria-label', `${index + 1} of 5 stars${labels[index] ? `, ${labels[index]}` : ''}`);
+			button.tabIndex = moviePageRating === 0 ? Number(index === 0) : Number(index + 1 === moviePageRating);
+			const lifted = previewing && index <= movieRatingHover;
+			button.querySelector('.peek-rating__lift').style.transform = lifted
+				? `translateY(-7px) scale(${index === movieRatingHover ? 1.15 : 1})`
+				: 'translateY(0) scale(1)';
+		});
+		const label = document.getElementById('your-rating-label');
+		if (previewing) {
+			const rect = row.getBoundingClientRect();
+			const slot = rect.width / buttons.length;
+			tip.textContent = labels[movieRatingHover] || String(movieRatingHover + 1);
+			tip.style.transform = `translateX(${slot * (movieRatingHover + 0.5)}px) translateX(-50%)`;
+			tip.dataset.show = 'true';
+			label.textContent = `${tip.textContent} (${movieRatingHover + 1}/5)`;
+		} else {
+			tip.dataset.show = 'false';
+			label.textContent = moviePageRating ? `Your rating: ${labels[moviePageRating - 1]} (${moviePageRating}/5)` : 'Select a rating';
+		}
+	}
+
+	async function submitMovieReview() {
+		const message = document.getElementById('movie-review-message');
+		if (!moviePageRating) {
+			message.textContent = 'Select a rating before submitting.';
+			return;
+		}
+		const response = await fetch('/api/rate', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				movie_id: moviePageId,
+				rating: moviePageRating,
+				review: document.getElementById('movie-review-input').value.trim()
+			})
+		});
+		const result = await response.json();
+		if (response.status === 401) {
+			openAuthModal();
+			return;
+		}
+		message.textContent = result.success ? 'Your review was saved.' : (result.error || 'Could not save review.');
+		if (result.success) loadMovieDetails();
+	}
+
+	function renderMovieReviews(reviews) {
+		const container = document.getElementById('movie-reviews');
+		container.replaceChildren();
+		if (!reviews.length) {
+			container.textContent = 'No reviews yet.';
+			return;
+		}
+		reviews.forEach(review => {
+			const item = document.createElement('article');
+			item.className = 'why-box';
+			const heading = document.createElement('strong');
+			heading.textContent = `${review.user_name || 'Movie fan'} · ${review.rating} / 5`;
+			const body = document.createElement('p');
+			body.textContent = review.review || '';
+			item.append(heading, body);
+			container.append(item);
+		});
+	}
+
+	function renderMovieProviders(providerData, checkedAt) {
+		const section = document.getElementById('movie-watch-providers-section');
+		const container = document.getElementById('movie-watch-providers');
+		const note = document.getElementById('movie-provider-note');
+		container.replaceChildren();
+		if (!providerData || providerData.country !== 'IN') return;
+
+		section.hidden = false;
+		const checked = checkedAt ? new Date(checkedAt).toLocaleDateString() : 'recently';
+		note.textContent = `Provider listings were last checked ${checked}; availability and catalogs can change.`;
+		const providerGroups = ['flatrate', 'free', 'ads', 'rent', 'buy'];
+		let hasProviders = false;
+		providerGroups.forEach(group => {
+			(providerData[group] || []).forEach(provider => {
+				hasProviders = true;
+				const item = document.createElement('span');
+				item.className = 'chip';
+				item.textContent = `${provider.provider_name} · ${group}`;
+				container.append(item);
+			});
+		});
+		if (!hasProviders) container.textContent = 'No providers currently listed for India.';
+	}
+</script>
+{% endblock %}

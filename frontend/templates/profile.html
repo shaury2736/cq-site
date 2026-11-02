@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+
+{% block title %}CQ — User Profile{% endblock %}
+
+{% block content %}
+
+<!-- Profile Content Container -->
+<div id="profile-content-area">
+  <!-- Profile Header Card -->
+  <div class="profile-header-card">
+    <img id="profile-avatar" src="" class="profile-avatar-img" alt="User Avatar" />
+    
+    <div style="flex: 1;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">
+        <h1 style="font-size: 36px; line-height: 1; margin: 0;" id="profile-name">User Profile</h1>
+        <span class="auth-provider-badge" id="profile-auth-badge">Google</span>
+        <span class="role-badge" id="profile-role-badge">USER</span>
+      </div>
+      <div style="color: var(--text-secondary); font-size: 14px;" id="profile-email">user@example.com</div>
+    </div>
+
+    <div style="display: flex; gap: 20px;">
+      <div class="profile-stat-box">
+        <div style="font-size: 24px; font-weight: 800; color: var(--netflix-red);" id="stat-ratings-count">0</div>
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Ratings Given</div>
+      </div>
+      <div class="profile-stat-box">
+        <div style="font-size: 24px; font-weight: 800; color: var(--cq-coral);" id="stat-watchlist-count">0</div>
+        <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Watchlist Movies</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section: Cold-Start Favorite Genre Setup -->
+  <div style="background: var(--bg-surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; margin-bottom: 36px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+      <div>
+        <h3 style="font-size: 22px; margin-bottom: 2px;">Favorite Genres (Personalized Recommendation Engine)</h3>
+        <p style="color: var(--text-secondary); font-size: 13.5px;">Select your preferred genres to fine-tune your ML hybrid recommendations.</p>
+      </div>
+      <button class="btn btn-primary" onclick="saveProfileGenres()">Save Preferences</button>
+    </div>
+    <div class="filter-bar" id="profile-genre-picker" style="margin-bottom: 0;">
+      <!-- Genre chips -->
+    </div>
+  </div>
+
+  <!-- Section: Rating History -->
+  <div class="section-header">
+    <div class="section-title">
+      <span class="title-accent"></span>
+      <span>Your Rating & Review History</span>
+    </div>
+  </div>
+
+  <div id="rating-history-list" style="margin-bottom: 40px;">
+    <!-- Dynamically loaded -->
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  let allAvailableGenres = [];
+  let userSelectedGenres = new Set();
+
+  document.addEventListener('DOMContentLoaded', () => {
+    loadProfileData();
+  });
+
+  async function loadProfileData() {
+    try {
+      const res = await fetch('/api/profile');
+      if (res.status === 401) {
+        renderGuestProfileView();
+        return;
+      }
+      const data = await res.json();
+      if (!data || !data.profile) {
+        renderGuestProfileView();
+        return;
+      }
+      const u = data.profile;
+
+      document.getElementById('profile-avatar').src = u.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${u.email}`;
+      document.getElementById('profile-name').innerText = u.name || u.email.split('@')[0];
+      document.getElementById('profile-email').innerText = u.email;
+      document.getElementById('stat-ratings-count').innerText = data.ratings_count || 0;
+      document.getElementById('stat-watchlist-count').innerText = data.watchlist_count || 0;
+
+      const authBadge = document.getElementById('profile-auth-badge');
+      authBadge.innerText = u.auth_provider === 'both'
+        ? 'Email + Google'
+        : (u.auth_provider === 'google' ? 'Google Account' : 'Email Account');
+      authBadge.className = `auth-provider-badge ${u.auth_provider}`;
+
+      const roleBadge = document.getElementById('profile-role-badge');
+      roleBadge.innerText = u.role ? u.role.toUpperCase() : 'USER';
+      roleBadge.className = `role-badge ${u.role}`;
+
+      userSelectedGenres = new Set(u.favorite_genres || []);
+
+      const resG = await fetch('/api/genres');
+      const dataG = await resG.json();
+      allAvailableGenres = dataG.genres || [];
+
+      renderGenrePicker();
+      renderRatingHistory(data.rating_history || []);
+    } catch (e) {
+      console.error('Error loading profile data', e);
+      renderGuestProfileView();
+    }
+  }
+
+  function renderGuestProfileView() {
+    const area = document.getElementById('profile-content-area');
+    if (!area) return;
+    area.innerHTML = `
+      <div style="text-align: center; padding: 70px 20px; background: var(--bg-surface); border-radius: 20px; border: 1px dashed var(--border); max-width: 600px; margin: 40px auto;">
+        <div style="font-size: 56px; margin-bottom: 16px;">👤</div>
+        <h2 style="font-size: 28px; margin-bottom: 10px;">Sign In to Access Your Profile</h2>
+        <p style="color: var(--text-secondary); font-size: 14.5px; margin-bottom: 24px; line-height: 1.6;">
+          Connect with Google or Sign In with Email to view your personalized rating history, manage favorite genres, and save movies to your watchlist.
+        </p>
+        <button class="btn btn-primary" style="padding: 12px 28px; font-size: 15px;" onclick="openAuthModal()">Sign In / Register</button>
+      </div>
+    `;
+  }
+
+  function renderGenrePicker() {
+    const container = document.getElementById('profile-genre-picker');
+    if (!container) return;
+    container.innerHTML = allAvailableGenres.map(g => {
+      const isSelected = userSelectedGenres.has(g);
+      return `<div class="chip ${isSelected ? 'active' : ''}" onclick="toggleProfileGenre('${g}', this)">${g}</div>`;
+    }).join('');
+  }
+
+  function toggleProfileGenre(genre, el) {
+    if (userSelectedGenres.has(genre)) {
+      userSelectedGenres.delete(genre);
+      el.classList.remove('active');
+    } else {
+      userSelectedGenres.add(genre);
+      el.classList.add('active');
+    }
+  }
+
+  async function saveProfileGenres() {
+    try {
+      const res = await fetch('/api/profile/genres', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ genres: Array.from(userSelectedGenres) })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Favorite Genres Saved!');
+      }
+    } catch (e) {
+      console.error('Failed saving genres', e);
+    }
+  }
+
+  function renderRatingHistory(history) {
+    const container = document.getElementById('rating-history-list');
+    if (!container) return;
+    if (!history || history.length === 0) {
+      container.innerHTML = `<p style="color:var(--text-secondary);">You have not rated any movies yet.</p>`;
+      return;
+    }
+
+    container.innerHTML = history.map(item => `
+      <div style="background:var(--bg-card); border:1px solid var(--border); border-radius:14px; padding:18px 22px; margin-bottom:14px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 8px;">
+          <div style="display:flex; align-items:center; gap:16px;">
+            <img src="${item.poster_url}" style="width:48px; height:68px; object-fit:cover; border-radius:6px;" alt="${item.title}" />
+            <div>
+              <a href="/movie/${item.movie_id}" style="font-weight:700; font-size:16px; color:var(--text-primary);">${item.title}</a>
+              <div style="color:var(--text-secondary); font-size:12.5px;">${item.year} • ${item.genres.join(', ')}</div>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:16px;">
+            <span style="color:var(--imdb-yellow); font-weight:800; font-size:18px;">${item.rating} ★</span>
+            <button class="btn btn-ghost btn-icon" title="Remove Rating" onclick="removeRatingFromHistory(${item.movie_id})">✕</button>
+          </div>
+        </div>
+        ${item.review ? `<p style="margin: 8px 0 0 64px; font-size: 13.5px; color: var(--text-muted); background: rgba(255,255,255,0.03); padding: 10px 14px; border-radius: 8px;">"${item.review}"</p>` : ''}
+      </div>
+    `).join('');
+  }
+
+  async function removeRatingFromHistory(movieId) {
+    try {
+      const res = await fetch(`/api/rate/${movieId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Rating removed.');
+        loadProfileData();
+      }
+    } catch (e) {
+      console.error('Error removing rating', e);
+    }
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}CQ — Personalized Recommendations{% endblock %}
+
+{% block content %}
+
+<div style="margin-bottom: 32px; text-align: center;">
+  <h1 style="font-size: 48px; line-height: 1; margin-bottom: 12px; color: var(--cq-silver); text-shadow: 0 4px 12px rgba(0,0,0,0.8);">
+    RECOMMENDED FOR YOU
+  </h1>
+  <div style="width: 60px; height: 4px; background: linear-gradient(90deg, var(--cq-crimson), var(--cq-red)); margin: 0 auto 16px; border-radius: 2px; box-shadow: 0 0 10px var(--cq-glow);"></div>
+  <p style="color: var(--text-secondary); font-size: 15px; max-width: 600px; margin: 0 auto;" id="recs-subtitle">
+    Combining Content-Based TF-IDF Cosine Similarity & Collaborative Filtering with Explainable AI justifications.
+  </p>
+</div>
+
+
+
+<!-- Filter Bar -->
+<div class="filter-bar" id="recs-genre-chips">
+  <div class="chip active" data-genre="All" onclick="filterRecs('All')">All Genres</div>
+  <div class="chip" data-genre="Sci-Fi" onclick="filterRecs('Sci-Fi')">Sci-Fi</div>
+  <div class="chip" data-genre="Action" onclick="filterRecs('Action')">Action</div>
+  <div class="chip" data-genre="Drama" onclick="filterRecs('Drama')">Drama</div>
+  <div class="chip" data-genre="Crime" onclick="filterRecs('Crime')">Crime</div>
+  <div class="chip" data-genre="Animation" onclick="filterRecs('Animation')">Animation</div>
+</div>
+
+<div class="movie-grid" id="recs-grid" style="margin-top: 24px;">
+  <!-- Loaded via JS -->
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  let selectedGenre = 'All';
+
+  document.addEventListener('DOMContentLoaded', () => {
+    loadRecommendations();
+  });
+
+  async function loadRecommendations() {
+    try {
+      const res = await fetch(`/api/recommendations?limit=12&genre=${selectedGenre === 'All' ? '' : selectedGenre}`);
+      const data = await res.json();
+      
+      // Cold start banner toggle
+      const coldAlert = document.getElementById('cold-start-alert');
+      if (coldAlert) {
+        coldAlert.style.display = data.is_cold_start ? 'block' : 'none';
+      }
+
+      const grid = document.getElementById('recs-grid');
+      if (data.recommendations && data.recommendations.length > 0) {
+        grid.innerHTML = data.recommendations.map(m => createMovieCard(m, { why: true })).join('');
+      } else {
+        grid.innerHTML = `<p style="color:var(--text-secondary);">No recommendations found for this genre.</p>`;
+      }
+    } catch (e) {
+      console.error('Failed loading recommendations page', e);
+    }
+  }
+
+  function filterRecs(genre) {
+    selectedGenre = genre;
+    document.querySelectorAll('#recs-genre-chips .chip').forEach(c => {
+      c.classList.toggle('active', c.dataset.genre === genre);
+    });
+    loadRecommendations();
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}CQ — Admin Portal{% endblock %}
+
+{% block content %}
+<section style="margin-bottom: 28px;">
+	<h1 style="font-size: 42px; line-height: 1; margin-bottom: 8px;">ADMIN PORTAL</h1>
+	<p style="color: var(--text-secondary);">Catalog and account administration</p>
+</section>
+
+<nav class="filter-bar" aria-label="Admin sections" style="margin-bottom: 24px;">
+	<button class="chip admin-tab-btn active" id="btn-tab-users" type="button" onclick="switchAdminTab('users')">Users</button>
+	<button class="chip admin-tab-btn" id="btn-tab-movies" type="button" onclick="switchAdminTab('movies')">Movies</button>
+	<button class="chip admin-tab-btn" id="btn-tab-ratings" type="button" onclick="switchAdminTab('ratings')">Ratings &amp; Reviews</button>
+</nav>
+<p id="admin-status" role="status" style="color: var(--text-secondary); margin-bottom: 16px;"></p>
+
+<section class="admin-panel active" id="admin-tab-users">
+	<div class="section-header">
+		<div class="section-title"><span class="title-accent"></span><span>Users (<span id="stat-total-users">0</span>)</span></div>
+		<input id="user-search-input" class="form-control" type="search" placeholder="Search name, email, or user ID" oninput="filterAdminUsersTable()" style="max-width: 360px;" />
+	</div>
+	<div style="overflow-x: auto;">
+		<table class="admin-table"><thead><tr><th>ID</th><th>User</th><th>Email</th><th>Login</th><th>Role</th><th>Ratings</th><th>Watchlist</th><th>Created</th><th>Actions</th></tr></thead><tbody id="users-tbody"></tbody></table>
+	</div>
+</section>
+
+<section class="admin-panel" id="admin-tab-movies">
+	<div class="section-header">
+		<div class="section-title"><span class="title-accent"></span><span>MongoDB Movies (<span id="stat-total-movies">0</span>)</span></div>
+		<input id="movie-search-input" class="form-control" type="search" placeholder="Search catalog" oninput="filterAdminMoviesTable()" style="max-width: 300px;" />
+	</div>
+	<div style="display: flex; gap: 10px; margin-bottom: 18px; max-width: 720px;">
+		<input id="tmdb-sync-query" class="form-control" type="search" placeholder="Optional TMDB title search" />
+		<button class="btn btn-primary" type="button" onclick="syncTmdbMovies()">Sync TMDB</button>
+	</div>
+	<div style="overflow-x: auto;">
+		<table class="admin-table"><thead><tr><th>TMDB ID</th><th>Poster</th><th>Title</th><th>Year</th><th>Genres</th><th>Director</th><th>TMDB rating</th><th>Actions</th></tr></thead><tbody id="movies-tbody"></tbody></table>
+	</div>
+</section>
+
+<section class="admin-panel" id="admin-tab-ratings">
+	<div class="section-header">
+		<div class="section-title"><span class="title-accent"></span><span>Ratings &amp; Reviews (<span id="stat-total-ratings">0</span>)</span></div>
+		<input id="rating-search-input" class="form-control" type="search" placeholder="Search users, titles, reviews" oninput="filterAdminRatingsTable()" style="max-width: 360px;" />
+	</div>
+	<div style="overflow-x: auto;">
+		<table class="admin-table"><thead><tr><th>User</th><th>Movie</th><th>Rating</th><th>Review</th><th>Updated</th><th>Actions</th></tr></thead><tbody id="ratings-tbody"></tbody></table>
+	</div>
+</section>
+
+<div id="edit-user-modal" class="modal-backdrop">
+	<div class="modal-content">
+		<button class="modal-close" type="button" onclick="closeAdminUserModal()">×</button>
+		<h2 style="margin-bottom: 18px;">Edit user profile</h2>
+		<form onsubmit="submitAdminUserEdit(event)">
+			<input type="hidden" id="edit-user-id" />
+			<div class="form-group"><label class="form-label" for="edit-user-name">Name</label><input class="form-control" id="edit-user-name" maxlength="120" required /></div>
+			<div class="form-group"><label class="form-label" for="edit-user-genres">Favorite genres</label><input class="form-control" id="edit-user-genres" placeholder="Drama, Comedy" /></div>
+			<p style="color: var(--text-muted); font-size: 12px; margin-bottom: 14px;">Email, role, and authentication credentials are not editable here.</p>
+			<button class="btn btn-primary" type="submit">Save profile</button>
+		</form>
+	</div>
+</div>
+
+<div id="edit-movie-modal" class="modal-backdrop">
+	<div class="modal-content">
+		<button class="modal-close" type="button" onclick="closeEditMovieModal()">×</button>
+		<h2 id="movie-modal-title" style="margin-bottom: 18px;">Edit movie</h2>
+		<form onsubmit="submitAdminSaveMovie(event)">
+			<input type="hidden" id="edit-movie-id" />
+			<div class="form-group"><label class="form-label" for="movie-title">Title</label><input class="form-control" id="movie-title" maxlength="300" required /></div>
+			<div class="form-group"><label class="form-label" for="movie-genres">Genres</label><input class="form-control" id="movie-genres" placeholder="Drama, Comedy" /></div>
+			<div class="form-group"><label class="form-label" for="movie-tagline">Tagline</label><input class="form-control" id="movie-tagline" maxlength="500" /></div>
+			<div class="form-group"><label class="form-label" for="movie-overview">Overview</label><textarea class="form-control" id="movie-overview" rows="5" maxlength="5000"></textarea></div>
+			<p style="color: var(--text-muted); font-size: 12px; margin-bottom: 14px;">TMDB fields refresh on sync; these edits are saved as admin overrides.</p>
+			<button class="btn btn-primary" type="submit">Save movie</button>
+		</form>
+	</div>
+</div>
+
+<div id="edit-rating-modal" class="modal-backdrop">
+	<div class="modal-content">
+		<button class="modal-close" type="button" onclick="closeEditRatingModal()">×</button>
+		<h2 style="margin-bottom: 18px;">Edit rating and review</h2>
+		<form onsubmit="submitAdminEditRating(event)">
+			<input type="hidden" id="edit-rating-userid" />
+			<input type="hidden" id="edit-rating-movieid" />
+			<div class="form-group"><label class="form-label" for="edit-rating-username">User</label><input class="form-control" id="edit-rating-username" readonly /></div>
+			<div class="form-group"><label class="form-label" for="edit-rating-movietitle">Movie</label><input class="form-control" id="edit-rating-movietitle" readonly /></div>
+			<div class="form-group"><label class="form-label" for="edit-rating-val">Rating (1-5)</label><input class="form-control" id="edit-rating-val" type="number" min="1" max="5" step="0.5" required /></div>
+			<div class="form-group"><label class="form-label" for="edit-rating-review">Review</label><textarea class="form-control" id="edit-rating-review" rows="4" maxlength="2000"></textarea></div>
+			<button class="btn btn-primary" type="submit">Save rating</button>
+			<button class="btn btn-danger" type="button" onclick="deleteRatingFromModal()">Delete rating</button>
+		</form>
+	</div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>document.addEventListener('DOMContentLoaded', initAdminDashboard);</script>
+{% endblock %}

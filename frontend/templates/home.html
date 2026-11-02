@@ -1,0 +1,393 @@
+{% extends "base.html" %}
+
+{% block title %}CQ — Home Dashboard{% endblock %}
+
+{% block content %}
+
+<!-- Search & Live Genre Filter Chips (Centered) -->
+<div class="center-search-container">
+  <h1 class="main-cq-title">CQ</h1>
+  
+  <div class="search-capsule" id="home-search-capsule" style="position: relative;">
+    <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="11" cy="11" r="8"></circle>
+      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+    </svg>
+    <div class="search-input-wrapper">
+      <input type="text" id="search-input" placeholder="Search movies, actors, directors, genres..." autocomplete="off">
+      <div class="search-spinner" id="home-search-spinner"></div>
+      <button type="button" class="search-clear-btn" id="home-search-clear" title="Clear search" aria-label="Clear search">✕</button>
+    </div>
+    <button class="btn-search" onclick="triggerSearch()">Search</button>
+
+    <!-- Animated Real-Time Live Suggestions Dropdown -->
+    <div class="search-suggestions-dropdown" id="home-suggestions-dropdown">
+      <div id="home-typo-hint" class="suggestion-typo-hint" style="display: none;"></div>
+      <ul class="suggestion-list" id="home-suggestion-list"></ul>
+      <div class="suggestion-footer" id="home-suggestion-footer" onclick="triggerSearch()">
+        <span id="home-suggestion-footer-text">Press Enter for full search page</span>
+        <span>→</span>
+      </div>
+    </div>
+  </div>
+  
+  <div class="filter-bar" id="genre-filter-chips">
+    <div class="chip active" data-genre="All" onclick="selectGenreFilter('All')">All Genres</div>
+    <div class="chip" data-genre="Sci-Fi" onclick="selectGenreFilter('Sci-Fi')">Sci-Fi</div>
+    <div class="chip" data-genre="Action" onclick="selectGenreFilter('Action')">Action</div>
+    <div class="chip" data-genre="Drama" onclick="selectGenreFilter('Drama')">Drama</div>
+    <div class="chip" data-genre="Crime" onclick="selectGenreFilter('Crime')">Crime</div>
+    <div class="chip" data-genre="Animation" onclick="selectGenreFilter('Animation')">Animation</div>
+    <div class="chip" data-genre="Thriller" onclick="selectGenreFilter('Thriller')">Thriller</div>
+  </div>
+</div>
+
+<!-- Did-You-Mean Banner on Home Search -->
+<div class="did-you-mean-banner" id="home-did-you-mean" style="display: none; max-width: 680px; margin: 0 auto 30px;">
+  <span class="did-you-mean-icon">💡</span>
+  <span id="home-did-you-mean-text"></span>
+</div>
+
+<!-- Section 1: Recommended For You / Search Results (Hybrid ML Engine) -->
+<div class="section-header" id="section-1-header">
+  <div class="section-title">
+    <span class="title-accent"></span>
+    <span id="section-1-title">Recommended For You</span>
+  </div>
+  <a href="/recommendations" id="view-all-recs-link" style="color: var(--cq-coral); font-size: 14px; font-weight: 600;">View All Recommendations →</a>
+</div>
+
+<div class="movie-grid" id="recommended-grid">
+  <!-- Dynamically loaded -->
+</div>
+
+<!-- Section 2: Trending & Popular Movies -->
+<div class="section-header" id="section-2-header">
+  <div class="section-title">
+    <span class="title-accent"></span>
+    <span id="section-2-title">Popular Right Now</span>
+  </div>
+</div>
+
+<div class="movie-grid" id="popular-grid">
+  <!-- Dynamically loaded -->
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  let activeGenre = 'All';
+  let homeActiveSuggestionIdx = -1;
+  let homeSuggestAbortController = null;
+  let homeLiveSearchDebounce = null;
+  let isSearchActive = false;
+
+  document.addEventListener('DOMContentLoaded', () => {
+    loadHomeData();
+
+    const searchInput = document.getElementById('search-input');
+    const clearBtn = document.getElementById('home-search-clear');
+    const dropdown = document.getElementById('home-suggestions-dropdown');
+
+    // 1. Real-time typing listener (instant suggestions while typing)
+    searchInput.addEventListener('input', (e) => {
+      const q = e.target.value;
+      if (clearBtn) clearBtn.classList.toggle('visible', Boolean(q.trim()));
+
+      clearTimeout(homeLiveSearchDebounce);
+      homeLiveSearchDebounce = setTimeout(() => {
+        handleHomeLiveSearch(q);
+      }, 350);
+    });
+
+    // 2. Keyboard Navigation in suggestions
+    searchInput.addEventListener('keydown', (e) => {
+      const items = document.querySelectorAll('#home-suggestion-list .suggestion-item');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (items.length > 0) {
+          homeActiveSuggestionIdx = (homeActiveSuggestionIdx + 1) % items.length;
+          updateHomeActiveSuggestion(items);
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (items.length > 0) {
+          homeActiveSuggestionIdx = (homeActiveSuggestionIdx - 1 + items.length) % items.length;
+          updateHomeActiveSuggestion(items);
+        }
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (homeActiveSuggestionIdx >= 0 && items[homeActiveSuggestionIdx]) {
+          const targetUrl = items[homeActiveSuggestionIdx].dataset.url;
+          if (targetUrl) {
+            window.location.href = targetUrl;
+            return;
+          }
+        }
+        closeHomeDropdown();
+        triggerSearch();
+      } else if (e.key === 'Escape') {
+        closeHomeDropdown();
+      }
+    });
+
+    // 3. Clear button click
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        searchInput.value = '';
+        clearBtn.classList.remove('visible');
+        closeHomeDropdown();
+        document.getElementById('home-did-you-mean').style.display = 'none';
+        isSearchActive = false;
+        loadHomeData();
+        searchInput.focus();
+      });
+    }
+
+    // 4. Click outside to dismiss suggestions
+    document.addEventListener('click', (e) => {
+      const capsule = document.getElementById('home-search-capsule');
+      if (capsule && !capsule.contains(e.target)) {
+        closeHomeDropdown();
+      }
+    });
+  });
+
+  function updateHomeActiveSuggestion(items) {
+    items.forEach((item, idx) => {
+      item.classList.toggle('active', idx === homeActiveSuggestionIdx);
+    });
+    if (homeActiveSuggestionIdx >= 0 && items[homeActiveSuggestionIdx]) {
+      items[homeActiveSuggestionIdx].scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function closeHomeDropdown() {
+    const dropdown = document.getElementById('home-suggestions-dropdown');
+    if (dropdown) dropdown.classList.remove('active');
+    homeActiveSuggestionIdx = -1;
+  }
+
+  // Real-Time Live Search (typing)
+  async function handleHomeLiveSearch(query) {
+    const cleanQ = query.trim();
+    if (!cleanQ) {
+      closeHomeDropdown();
+      document.getElementById('home-did-you-mean').style.display = 'none';
+      if (isSearchActive) {
+        isSearchActive = false;
+        loadHomeData();
+      }
+      return;
+    }
+
+    // Cancel in-flight outdated request
+    if (homeSuggestAbortController) {
+      homeSuggestAbortController.abort();
+    }
+    homeSuggestAbortController = new AbortController();
+
+    const spinner = document.getElementById('home-search-spinner');
+    if (spinner) spinner.classList.add('visible');
+
+    try {
+      const res = await fetch(`/api/search/suggestions?q=${encodeURIComponent(cleanQ)}&limit=6`, {
+        signal: homeSuggestAbortController.signal
+      });
+      const data = await res.json();
+
+      if (spinner) spinner.classList.remove('visible');
+      renderHomeSuggestions(data, cleanQ);
+
+      // Dynamically update movies in-place without pressing Enter!
+      executeLiveGridSearch(cleanQ);
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('Autocomplete failed:', err);
+        if (spinner) spinner.classList.remove('visible');
+      }
+    }
+  }
+
+  function renderHomeSuggestions(data, query) {
+    const dropdown = document.getElementById('home-suggestions-dropdown');
+    const list = document.getElementById('home-suggestion-list');
+    const typoHint = document.getElementById('home-typo-hint');
+    const footerText = document.getElementById('home-suggestion-footer-text');
+
+    if (!data.suggestions || data.suggestions.length === 0) {
+      list.innerHTML = `<div class="suggestion-empty">No instant suggestions for "${query}". Press Enter to search.</div>`;
+      typoHint.style.display = 'none';
+      dropdown.classList.add('active');
+      return;
+    }
+
+    if (data.spell_corrected && data.corrected_query) {
+      typoHint.innerHTML = `<span>💡</span> <span>Closest match: <strong>${data.corrected_query}</strong></span>`;
+      typoHint.style.display = 'flex';
+    } else {
+      typoHint.style.display = 'none';
+    }
+
+    list.innerHTML = data.suggestions.map(s => {
+      const posterHtml = s.poster_url 
+        ? `<img class="suggestion-poster" src="${s.poster_url}" alt="${s.title}" loading="lazy" />`
+        : `<div class="suggestion-poster-fallback">🎬</div>`;
+
+      const matchBadge = s.match_field 
+        ? `<span class="suggestion-badge ${s.match_field}">${s.match_field}</span>` 
+        : '';
+
+      const ratingBadge = s.rating 
+        ? `<span class="suggestion-rating">★ ${s.rating}</span>`
+        : '';
+
+      const yearText = s.year || 'Year';
+      const genreText = s.genres && s.genres.length > 0 ? s.genres[0] : '';
+
+      return `
+        <li class="suggestion-item" data-url="${s.url}" onclick="window.location.href='${s.url}'">
+          ${posterHtml}
+          <div class="suggestion-info">
+            <div class="suggestion-title">${s.highlight_html || s.title}</div>
+            <div class="suggestion-sub">
+              <span>${yearText} • ${genreText}</span>
+            </div>
+          </div>
+          ${matchBadge}
+          ${ratingBadge}
+        </li>
+      `;
+    }).join('');
+
+    if (footerText) {
+      footerText.textContent = `View all results for "${query}"`;
+    }
+
+    homeActiveSuggestionIdx = -1;
+    dropdown.classList.add('active');
+  }
+
+  // Live in-place search on the grid
+  async function executeLiveGridSearch(query) {
+    isSearchActive = true;
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=12&genre=${activeGenre === 'All' ? '' : activeGenre}`);
+      const data = await res.json();
+      
+      const popGrid = document.getElementById('popular-grid');
+      const recGrid = document.getElementById('recommended-grid');
+      const sec1Title = document.getElementById('section-1-title');
+      const sec2Header = document.getElementById('section-2-header');
+      const viewAllLink = document.getElementById('view-all-recs-link');
+      const didYouMean = document.getElementById('home-did-you-mean');
+
+      if (viewAllLink) viewAllLink.style.display = 'none';
+      if (sec2Header) sec2Header.style.display = 'none';
+      if (popGrid) popGrid.style.display = 'none';
+
+      // Typo Banner
+      if (data.spell_corrected && data.corrected_query) {
+        didYouMean.style.display = 'flex';
+        document.getElementById('home-did-you-mean-text').innerHTML = `
+          <span>Showing results for <strong>${data.corrected_query}</strong></span>
+          <span class="search-instead-sep">•</span>
+          <button class="btn-instead" onclick="forceExactHomeSearch('${data.query}')">Search instead for "${data.query}"</button>
+        `;
+      } else {
+        didYouMean.style.display = 'none';
+      }
+
+      const movies = data.movies || [];
+      sec1Title.textContent = `Live Results for "${data.corrected_query || query}" (${data.total_results} found)`;
+      
+      if (movies.length > 0) {
+        recGrid.innerHTML = movies.map(m => createMovieCard(m)).join('');
+      } else {
+        recGrid.innerHTML = `
+          <div style="grid-column: 1 / -1; text-align: center; padding: 40px 20px; color: var(--text-secondary);">
+            <p style="font-size: 18px; color: var(--cq-silver); margin-bottom: 8px;">No movies found matching "${query}"</p>
+            <p style="font-size: 14px;">Try checking your spelling, or search by actor, director, or genre.</p>
+          </div>
+        `;
+      }
+    } catch (err) {
+      console.error('Live grid search error:', err);
+    }
+  }
+
+  function forceExactHomeSearch(query) {
+    document.getElementById('search-input').value = query;
+    document.getElementById('home-did-you-mean').style.display = 'none';
+    executeLiveGridSearch(query);
+  }
+
+  function triggerSearch() {
+    const q = document.getElementById('search-input').value.trim();
+    closeHomeDropdown();
+    if (!q) {
+      loadHomeData();
+      return;
+    }
+    // Navigate to dedicated search results page
+    window.location.href = `/search?q=${encodeURIComponent(q)}`;
+  }
+
+  async function loadHomeData() {
+    const sec1Title = document.getElementById('section-1-title');
+    const sec2Header = document.getElementById('section-2-header');
+    const popGrid = document.getElementById('popular-grid');
+    const viewAllLink = document.getElementById('view-all-recs-link');
+    const didYouMean = document.getElementById('home-did-you-mean');
+
+    if (sec1Title) sec1Title.textContent = 'Recommended For You';
+    if (sec2Header) sec2Header.style.display = 'flex';
+    if (popGrid) popGrid.style.display = 'grid';
+    if (viewAllLink) viewAllLink.style.display = 'inline';
+    if (didYouMean) didYouMean.style.display = 'none';
+
+    // 1. Fetch Hybrid Recommendations
+    try {
+      const resRecs = await fetch(`/api/recommendations?limit=6&genre=${activeGenre === 'All' ? '' : activeGenre}`);
+      const dataRecs = await resRecs.json();
+      const recGrid = document.getElementById('recommended-grid');
+      
+      if (dataRecs.recommendations && dataRecs.recommendations.length > 0) {
+        recGrid.innerHTML = dataRecs.recommendations.map(m => createMovieCard(m, { why: true })).join('');
+      } else {
+        recGrid.innerHTML = `<p style="color:var(--text-secondary);">No recommendations match the filter.</p>`;
+      }
+    } catch (e) {
+      console.error('Failed loading recommendations', e);
+    }
+
+    // 2. Fetch Popular Movies
+    try {
+      const resPop = await fetch(`/api/movies?sort_by=popular&genre=${activeGenre === 'All' ? '' : activeGenre}`);
+      const dataPop = await resPop.json();
+      
+      if (dataPop.movies && dataPop.movies.length > 0) {
+        popGrid.innerHTML = dataPop.movies.slice(0, 8).map(m => createMovieCard(m)).join('');
+      } else {
+        popGrid.innerHTML = `<p style="color:var(--text-secondary);">No movies found.</p>`;
+      }
+    } catch (e) {
+      console.error('Failed loading popular movies', e);
+    }
+  }
+
+  function selectGenreFilter(genre) {
+    activeGenre = genre;
+    document.querySelectorAll('#genre-filter-chips .chip').forEach(c => {
+      c.classList.toggle('active', c.dataset.genre === genre);
+    });
+    const q = document.getElementById('search-input').value.trim();
+    if (q) {
+      executeLiveGridSearch(q);
+    } else {
+      loadHomeData();
+    }
+  }
+</script>
+{% endblock %}
