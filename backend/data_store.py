@@ -643,7 +643,7 @@ class DataStore:
             if "tmdb_id" in doc
         )
 
-    def cache_movie(self, movie, fetch_after=True):
+    def cache_movie(self, movie, fetch_after=True, activate=False, preserve_details=False):
         """Upsert a TMDB movie while reapplying any explicit admin overrides."""
         db = self._require_db()
         document = dict(movie)
@@ -657,14 +657,51 @@ class DataStore:
         document["imdb_rating"] = None
         document["data_source"] = "tmdb"
         document["last_synced_at"] = datetime.now(timezone.utc)
-        document["catalog_active"] = existing.get("catalog_active", True)
+        document["catalog_active"] = True if activate else existing.get("catalog_active", True)
+        if preserve_details:
+            for field in (
+                "imdb_id", "runtime", "duration", "tagline", "status",
+                "production_companies", "production_countries", "spoken_languages",
+                "homepage", "maturity", "cast", "directors", "director", "crew",
+                "trailer", "youtube_trailer_id", "watch_providers",
+                "watch_provider_country", "watch_provider_checked_at",
+                "details_synced_at", "keywords"
+            ):
+                if not document.get(field) and existing.get(field):
+                    document[field] = existing[field]
         overrides = existing.get("admin_overrides", {})
         document["admin_overrides"] = overrides
         document.update(overrides)
-        db.movies.update_one({"tmdb_id": tmdb_id}, {"$set": document}, upsert=True)
+        update = {"$set": document}
+        if activate:
+            update["$unset"] = {"deleted_at": ""}
+        db.movies.update_one({"tmdb_id": tmdb_id}, update, upsert=True)
         if fetch_after:
             return self.get_movie_by_tmdb_id(tmdb_id)
         return document
+
+    def deactivate_movies_except(self, tmdb_ids):
+        """Deactivate catalog movies not included in the supplied TMDB ID set."""
+        raw_ids = list(tmdb_ids)
+        if any(isinstance(tmdb_id, bool) for tmdb_id in raw_ids):
+            raise ValueError("TMDB movie IDs must be positive integers.")
+        try:
+            keep_ids = {int(tmdb_id) for tmdb_id in raw_ids}
+        except (TypeError, ValueError):
+            raise ValueError("TMDB movie IDs must be positive integers.") from None
+        if not keep_ids or any(tmdb_id <= 0 for tmdb_id in keep_ids):
+            raise ValueError("At least one positive TMDB movie ID is required.")
+        result = self._require_db().movies.update_many(
+            {
+                "tmdb_id": {"$exists": True, "$nin": sorted(keep_ids)},
+                "catalog_active": {"$ne": False}
+            },
+            {"$set": {
+                "catalog_active": False,
+                "deleted_at": datetime.now(timezone.utc)
+            }}
+        )
+        return result.modified_count
 
     def update_movie(self, tmdb_id, changes):
         allowed_fields = {"title", "tagline", "overview", "genres", "homepage"}
